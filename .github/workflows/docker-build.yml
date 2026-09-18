@@ -1,0 +1,206 @@
+name: Build Hermes Studio Docker Image
+
+# 目标：跟随上游 EKKOLearnAI/hermes-studio 的 web-ui release（v0.7.x 线），
+# 用本仓库的干净 Dockerfile（不内置 hermes agent）构建镜像并推送到 GHCR。
+#
+# GitHub Actions 无法订阅「别的仓库」的 release 事件，所以用定时轮询逼近：
+# 没有新 release 时整个运行 <1 分钟就退出（只调 API + 查 manifest），不消耗构建时间。
+
+on:
+  schedule:
+    # 默认每 6 小时检查一次上游 release（错开整点，避开 GitHub cron 高峰）。
+    # 想改成每天一次：改成 '17 2 * * *'
+    - cron: '17 */6 * * *'
+  push:
+    branches: [main, master]
+    paths:
+      - '.github/workflows/docker-build.yml'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要构建的上游 release tag（如 v0.7.20）；留空 = 自动取最新 web-ui release'
+        required: false
+        default: ''
+      platforms:
+        description: '目标平台（只想要 amd64 会快很多）'
+        required: false
+        default: 'linux/amd64,linux/arm64'
+      with_ffmpeg:
+        description: '附带静态 ffmpeg（浏览器语音输入转码，+76MB）。true/false'
+        type: boolean
+        required: false
+        default: false
+      force:
+        description: 'GHCR 已存在该 tag 时也强制重建'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-build
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: EKKOLearnAI/hermes-studio
+  DEFAULT_PLATFORMS: linux/amd64,linux/arm64
+
+jobs:
+  build:
+    name: Build & push to GHCR
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      # 先登录 GHCR：后续既用它判断镜像是否已存在，也用它推送
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Resolve target release
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_PLATFORMS: ${{ inputs.platforms }}
+          WITH_FFMPEG: ${{ inputs.with_ffmpeg }}
+          FORCE: ${{ inputs.force }}
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # GHCR 要求镜像名全小写
+          IMAGE="${IMAGE,,}"
+
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          else
+            # 上游在同一个 repo 里发多条 release 线：
+            #   v0.7.x            -> web UI + 桌面版（带 hermes-web-ui-*.tar.gz 资产）← 我们要构建的
+            #   v1.x              -> Android 版（HStudio.apk）
+            #   hermes-*-runtime  -> 独立 runtime 线
+            # 且上游会主动把 release 从 "latest" 标记移除（--latest=false），
+            # /releases/latest 不可靠。判别 web-ui 线的可靠特征是：
+            # release tag == 它附带的 hermes-web-ui-<版本>.tar.gz 的版本号
+            # （如 v0.7.20 附带 hermes-web-ui-0.7.20.tar.gz；而 Android 线
+            #   v1.0.3 附带的是 hermes-web-ui-0.7.18.tar.gz，tag 与版本不一致）。
+            if ! RELEASES=$(gh api "repos/${UPSTREAM_REPO}/releases?per_page=100"); then
+              echo "::error::gh api 调用失败（网络或认证问题）"
+              exit 1
+            fi
+            TAG=$(printf '%s' "$RELEASES" | jq -r '
+              [ .[]
+                | select(.draft != true and .prerelease != true)
+                | . as $r
+                | ($r.assets[]?
+                    | select(.name | test("^hermes-web-ui-.*[.]tar[.]gz$"))
+                    | .name | sub("^hermes-web-ui-"; "") | sub("[.]tar[.]gz$"; "")) as $pkgver
+                | select($r.tag_name == "v" + $pkgver)
+              ]
+              | sort_by(.published_at)
+              | last
+              | .tag_name // empty' 2>/dev/null) || true
+            if [ -z "$TAG" ]; then
+              echo "::error::无法从 ${UPSTREAM_REPO} 解析出 web-ui release（可能是 API 限流或响应格式异常）。上游 API 响应前 300 字符："
+              printf '%s' "$RELEASES" | head -c 300
+              exit 1
+            fi
+          fi
+
+          VERSION="${TAG#v}"
+          PLATFORMS="${INPUT_PLATFORMS:-$DEFAULT_PLATFORMS}"
+
+          # build-args：WITH_FFMPEG 控制是否附带静态 ffmpeg
+          BUILD_ARGS="WITH_FFMPEG=${WITH_FFMPEG:-false}"
+
+          # 幂等：GHCR 里已有该 tag 就跳过（force 可强制重建）
+          SKIP=false
+          if [ "$FORCE" != "true" ] && docker manifest inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
+            SKIP=true
+          fi
+
+          {
+            echo "tag=${TAG}"
+            echo "version=${VERSION}"
+            echo "image=${IMAGE}"
+            echo "platforms=${PLATFORMS}"
+            echo "build_args=${BUILD_ARGS}"
+            echo "skipped=${SKIP}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Summary (skipped)
+        if: steps.resolve.outputs.skipped == 'true'
+        env:
+          IMAGE: ${{ steps.resolve.outputs.image }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          {
+            echo "### ⏭️ Skipped"
+            echo ""
+            echo "\`${IMAGE}:${TAG}\` already exists in GHCR — nothing to build."
+            echo "Manual runs can check the **force** input to rebuild anyway."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout upstream at tag
+        if: steps.resolve.outputs.skipped != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: EKKOLearnAI/hermes-studio
+          ref: ${{ steps.resolve.outputs.tag }}
+          persist-credentials: false
+
+      - name: Set up QEMU
+        if: steps.resolve.outputs.skipped != 'true'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: steps.resolve.outputs.skipped != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        if: steps.resolve.outputs.skipped != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ steps.resolve.outputs.platforms }}
+          push: true
+          provenance: false
+          tags: |
+            ${{ steps.resolve.outputs.image }}:${{ steps.resolve.outputs.tag }}
+            ${{ steps.resolve.outputs.image }}:${{ steps.resolve.outputs.version }}
+            ${{ steps.resolve.outputs.image }}:latest
+          build-args: ${{ steps.resolve.outputs.build_args }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.title=Hermes Studio (hermes-web-ui)
+            org.opencontainers.image.description=Clean self-built image of EKKOLearnAI/hermes-studio web UI (no bundled agent)
+            org.opencontainers.image.source=https://github.com/EKKOLearnAI/hermes-studio
+            org.opencontainers.image.version=${{ steps.resolve.outputs.version }}
+
+      - name: Summary (built)
+        if: steps.resolve.outputs.skipped != 'true'
+        env:
+          IMAGE: ${{ steps.resolve.outputs.image }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+          PLATFORMS: ${{ steps.resolve.outputs.platforms }}
+          WITH_FFMPEG: ${{ inputs.with_ffmpeg }}
+        run: |
+          {
+            echo "### ✅ Built & pushed"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Upstream release | [\`${TAG}\`](https://github.com/EKKOLearnAI/hermes-studio/releases/tag/${TAG}) |"
+            echo "| Platforms | \`${PLATFORMS}\` |"
+            echo "| Static ffmpeg | \`${WITH_FFMPEG:-false}\` |"
+            echo "| Image | \`${IMAGE}:${TAG}\` |"
+            echo "| | \`${IMAGE}:${VERSION}\` |"
+            echo "| | \`${IMAGE}:latest\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
