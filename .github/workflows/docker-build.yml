@@ -22,9 +22,9 @@ on:
         required: false
         default: ''
       platforms:
-        description: '目标平台（只想要 amd64 会快很多）'
+        description: '目标平台（默认只 amd64，够用且快）'
         required: false
-        default: 'linux/amd64,linux/arm64'
+        default: 'linux/amd64'
       with_ffmpeg:
         description: '附带静态 ffmpeg（浏览器语音输入转码，+76MB）。true/false'
         type: boolean
@@ -46,7 +46,7 @@ concurrency:
 
 env:
   UPSTREAM_REPO: EKKOLearnAI/hermes-studio
-  DEFAULT_PLATFORMS: linux/amd64,linux/arm64
+  DEFAULT_PLATFORMS: linux/amd64
 
 jobs:
   build:

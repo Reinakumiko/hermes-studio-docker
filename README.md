@@ -28,7 +28,7 @@
 |---|---|
 | `schedule`（每 6 小时） | 查询上游最新 web-ui release，GHCR 里没有对应 tag 才构建 |
 | `push`（仅本 workflow 文件变动） | 同上，用于改完 workflow 后立即验证 |
-| `workflow_dispatch`（手动） | 可选参数：`tag`（构建指定版本）、`platforms`（默认 `linux/amd64,linux/arm64`）、`with_ffmpeg`（附带静态 ffmpeg，默认 false）、`force`（已存在也强制重建） |
+| `workflow_dispatch`（手动） | 可选参数：`tag`（构建指定版本）、`platforms`（默认 `linux/amd64`）、`with_ffmpeg`（附带静态 ffmpeg，默认 false）、`force`（已存在也强制重建） |
 
 想改成**每天一次**：把 `.github/workflows/docker-build.yml` 里的 cron `17 */6 * * *` 改成 `17 2 * * *`。
 
@@ -85,7 +85,7 @@ docker logs hermes-webui 2>&1 | grep -i token
 ## 注意事项
 
 - **60 天不活跃会停**：GitHub 会把连续 60 天没有任何 commit 的仓库的 scheduled workflow 自动禁用。如果发现不构建了，去 Actions 页面重新 Enable（或随便 push 一个 commit）。
-- **arm64 是 QEMU 模拟构建**：较慢（上游自己双架构构建约 45 分钟内）。只跑 x86 机器的话，手动触发时把 `platforms` 填 `linux/amd64` 会快很多。
+- **默认只构建 amd64**：够用且快。需要 arm64 时手动触发把 `platforms` 填 `linux/amd64,linux/arm64`（arm64 是 QEMU 模拟构建，较慢）。
 - **静态 ffmpeg 下载源**：`with_ffmpeg: true` 时从 `github.com/eugeneware/ffmpeg-static` 的 release 下载（与 npm 包 `ffmpeg-static` 同源），GitHub Actions 上网络正常。若该源不可达，构建会失败，此时去掉 ffmpeg 选项即可。
 - **许可证**：上游是 BSL-1.1（source-available）。自用/内部使用没问题，但**不要把构建出的镜像公开分发**，GHCR 包保持 private 即可。
 - 上游其实官方发布了预构建镜像 `ekkoye8888/hermes-web-ui`（Docker Hub，含 agent），哪天想要完整功能可以直接用它。
