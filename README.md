@@ -4,6 +4,23 @@
 
 **这是「干净」镜像**：只包含 hermes-studio web UI，**不内置 hermes agent**（上游官方镜像基于 `nousresearch/hermes-agent`，内含完整 agent 运行时 + Python，体积大）。本镜像基于 `node:24-bookworm-slim`，多阶段构建，非 root 运行。
 
+## 两种部署形态
+
+### 形态 A：bridge 架构（推荐）——连接你已运行的 hermes
+
+```
+hermes-studio (干净容器) ──(bridge协议 TCP)──> bridge 容器 ──(tui_gateway JSON-RPC over WS)──> 你机器上的 hermes serve
+```
+
+- studio 镜像内置 hermes 探测 stub（`WITH_BRIDGE_STUB=true`，默认开）
+- bridge 镜像由同一 workflow 自动构建：`ghcr.io/<你>/<仓库>-bridge`
+- 部署：`docker compose -f docker-compose.bridge.yml up -d`（改 `HERMES_GATEWAY_WS`/`HERMES_GATEWAY_TOKEN` 指向你的 hermes）
+- bridge 实现与协议映射详见 [bridge/PLAN.md](bridge/PLAN.md)，测试 122 项全过
+
+### 形态 B：独立运行（无 agent）
+
+直接用 `docker-compose.yml`——管理界面正常，agent 功能（聊天）不可用。
+
 **跟随上游 release 的方式**：GitHub Actions 无法订阅「别人仓库」的 release 事件，所以本仓库用**定时轮询**逼近——默认每 6 小时查一次上游 release，有新版本才构建（没有新版本时整次运行 <1 分钟即退出，几乎不消耗时间）。上游发版很频繁（每周 2~4 个），6 小时的检查间隔基本等于"跟随 release"。
 
 ## 快速开始

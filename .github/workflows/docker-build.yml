@@ -146,12 +146,17 @@ jobs:
             echo "Manual runs can check the **force** input to rebuild anyway."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Checkout this repo (Dockerfile + bridge)
+        if: steps.resolve.outputs.skipped != 'true'
+        uses: actions/checkout@v4
+
       - name: Checkout upstream at tag
         if: steps.resolve.outputs.skipped != 'true'
         uses: actions/checkout@v4
         with:
           repository: EKKOLearnAI/hermes-studio
           ref: ${{ steps.resolve.outputs.tag }}
+          path: upstream
           persist-credentials: false
 
       - name: Set up QEMU
@@ -162,11 +167,12 @@ jobs:
         if: steps.resolve.outputs.skipped != 'true'
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push
+      - name: Build and push (studio)
         if: steps.resolve.outputs.skipped != 'true'
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ./upstream
+          file: ./Dockerfile
           platforms: ${{ steps.resolve.outputs.platforms }}
           push: true
           provenance: false
@@ -181,6 +187,24 @@ jobs:
             org.opencontainers.image.title=Hermes Studio (hermes-web-ui)
             org.opencontainers.image.description=Clean self-built image of EKKOLearnAI/hermes-studio web UI (no bundled agent)
             org.opencontainers.image.source=https://github.com/EKKOLearnAI/hermes-studio
+            org.opencontainers.image.version=${{ steps.resolve.outputs.version }}
+
+      - name: Build and push (bridge)
+        if: steps.resolve.outputs.skipped != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./bridge
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ${{ steps.resolve.outputs.image }}-bridge:${{ steps.resolve.outputs.tag }}
+            ${{ steps.resolve.outputs.image }}-bridge:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.title=Hermes Studio bridge (studio ↔ gateway)
+            org.opencontainers.image.description=Bridge translating hermes-studio bridge protocol to tui_gateway JSON-RPC
             org.opencontainers.image.version=${{ steps.resolve.outputs.version }}
 
       - name: Summary (built)
@@ -203,4 +227,5 @@ jobs:
             echo "| Image | \`${IMAGE}:${TAG}\` |"
             echo "| | \`${IMAGE}:${VERSION}\` |"
             echo "| | \`${IMAGE}:latest\` |"
+            echo "| Bridge | \`${IMAGE}-bridge:${TAG}\` |"
           } >> "$GITHUB_STEP_SUMMARY"

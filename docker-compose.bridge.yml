@@ -1,0 +1,54 @@
+# bridge 架构部署模板：hermes-studio（干净镜像）+ 自研 bridge → 你已运行的 hermes gateway
+#
+# 前提：你的 hermes 机器上跑着 `hermes serve --host 0.0.0.0`（暴露 /api/ws）
+#
+# 用法：
+#   1. 修改下方 HERMES_GATEWAY_WS / HERMES_GATEWAY_TOKEN（或写入同目录 .env）
+#   2. WEBUI_IMAGE 改成你的 GHCR 镜像（或保持 build 本地构建）
+#   3. docker compose -f docker-compose.bridge.yml up -d
+services:
+  hermes-bridge:
+    build: ./bridge
+    # 或用 CI 构建的镜像：image: ghcr.io/<你的用户名>/hermes-studio-docker-bridge:latest
+    container_name: hermes-bridge
+    command:
+      - --listen
+      - 0.0.0.0:18765
+      - --gateway
+      - ${HERMES_GATEWAY_WS:-ws://host.docker.internal:9119/api/ws}
+      - --token
+      - ${HERMES_GATEWAY_TOKEN:-}
+      - --state-file
+      - /data/bridge_state.json
+    volumes:
+      - bridge-data:/data
+    restart: unless-stopped
+
+  hermes-webui:
+    image: ${WEBUI_IMAGE:-ghcr.io/CHANGE-ME/hermes-studio-docker:latest}
+    container_name: ${WEBUI_CONTAINER_NAME:-hermes-webui}
+    depends_on:
+      - hermes-bridge
+    ports:
+      - "${PORT:-6060}:${PORT:-6060}"
+      - "${PREVIEW_FRONTEND_PORT:-8651}:8651"
+      - "${XAI_OAUTH_PORT:-56121}:56121"
+    volumes:
+      - ${HERMES_DATA_DIR:-./hermes_data}:/home/agent/.hermes
+      - ${HERMES_DATA_DIR:-./hermes_data}/hermes-web-ui:/home/agent/.hermes-web-ui
+    environment:
+      - PORT=${PORT:-6060}
+      - HERMES_HOME=/home/agent/.hermes
+      # bridge 架构核心：连 bridge 而非本地 spawn
+      - HERMES_AGENT_BRIDGE_ENDPOINT=tcp://hermes-bridge:18765
+      # 探测 stub（镜像内置 /usr/local/bin/hermes）
+      - HERMES_BIN=/usr/local/bin/hermes
+      - HERMES_WEB_UI_DISABLE_GATEWAY_AUTOSTART=1
+      - HERMES_WEB_UI_AUTH_JWT_EXPIRES_IN=${HERMES_WEB_UI_AUTH_JWT_EXPIRES_IN:-30d}
+      - HERMES_LAN_ADVERTISE_URL=${HERMES_LAN_ADVERTISE_URL:-}
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+
+volumes:
+  bridge-data:
