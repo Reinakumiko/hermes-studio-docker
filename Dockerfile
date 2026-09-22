@@ -63,15 +63,17 @@ RUN if [ "$WITH_FFMPEG" = "true" ]; then \
 # 非 root 运行用户（与上游镜像内的路径约定保持一致：/home/agent）
 RUN useradd --create-home --home-dir /home/agent --shell /bin/bash agent
 
-# bridge 架构支持：hermes 探测 stub。
-# hermes-studio 启动时用 Python import 探测 hermes 可用性（import hermes_cli），
-# 探测不到就跳过 agent bridge 启动。本镜像不含真实 hermes，故内置最小 stub
-# 让探测通过，实际 agent 由外部 gateway（经 bridge）提供。
-# 设 WITH_BRIDGE_STUB=false 可得真正无 Python 的纯净镜像（此时无法用 bridge 架构）。
+# bridge 架构支持：hermes 探测 stub + 内置 bridge（单容器形态）。
+# - hermes-studio 启动时用 Python import 探测 hermes 可用性（import hermes_cli），
+#   探测不到就跳过 agent bridge 启动。本镜像不含真实 hermes，故内置最小 stub
+#   让探测通过，实际 agent 由外部 gateway 提供。
+# - bridge.py 一并打进镜像：设 BRIDGE_GATEWAY_URL 环境变量即启用（见 container-entrypoint.sh），
+#   studio 经容器内 localhost 连接，无需独立 bridge 容器。
+# - 设 WITH_BRIDGE_STUB=false 可得真正无 Python 的纯净镜像（无 bridge 能力）。
 ARG WITH_BRIDGE_STUB=true
 RUN if [ "$WITH_BRIDGE_STUB" = "true" ]; then \
       apt-get update \
-      && apt-get install -y --no-install-recommends python3 \
+      && apt-get install -y --no-install-recommends python3 python3-websockets \
       && rm -rf /var/lib/apt/lists/* \
       && mkdir -p /usr/local/lib/hermes-stub/hermes_cli \
       && printf '__version__ = "0.21.0-bridge-stub"\n' > /usr/local/lib/hermes-stub/hermes_cli/__init__.py \
@@ -80,6 +82,11 @@ RUN if [ "$WITH_BRIDGE_STUB" = "true" ]; then \
     fi
 # stub 目录对 PYTHONPATH 无害（不存在时 Python 忽略）
 ENV PYTHONPATH=/usr/local/lib/hermes-stub
+
+# 内置 bridge（来自 named context "bridge"，见 workflow 的 additional-contexts）
+COPY --from=bridge --chown=agent:agent bridge.py /opt/bridge/bridge.py
+COPY --from=bridge --chown=root:root container-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 WORKDIR /app
 # 只复制运行所需文件（与官方 npm 包 hermes-web-ui 的内容一致）
@@ -97,5 +104,5 @@ ENV NODE_ENV=production \
 
 USER agent
 EXPOSE 6060
-ENTRYPOINT ["/app/bin/start-studio-all.sh"]
+ENTRYPOINT ["/entrypoint.sh"]
 CMD []

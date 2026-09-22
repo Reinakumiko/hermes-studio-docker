@@ -167,12 +167,15 @@ jobs:
         if: steps.resolve.outputs.skipped != 'true'
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and push (studio)
+      - name: Build and push (studio + built-in bridge)
         if: steps.resolve.outputs.skipped != 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./upstream
           file: ./Dockerfile
+          # bridge.py / container-entrypoint.sh 来自本仓库（named context）
+          additional-contexts: |
+            bridge=./bridge
           platforms: ${{ steps.resolve.outputs.platforms }}
           push: true
           provenance: false
@@ -185,26 +188,8 @@ jobs:
           cache-to: type=gha,mode=max
           labels: |
             org.opencontainers.image.title=Hermes Studio (hermes-web-ui)
-            org.opencontainers.image.description=Clean self-built image of EKKOLearnAI/hermes-studio web UI (no bundled agent)
+            org.opencontainers.image.description=Clean self-built image of EKKOLearnAI/hermes-studio web UI (no bundled agent; built-in gateway bridge)
             org.opencontainers.image.source=https://github.com/EKKOLearnAI/hermes-studio
-            org.opencontainers.image.version=${{ steps.resolve.outputs.version }}
-
-      - name: Build and push (bridge)
-        if: steps.resolve.outputs.skipped != 'true'
-        uses: docker/build-push-action@v6
-        with:
-          context: ./bridge
-          platforms: linux/amd64
-          push: true
-          provenance: false
-          tags: |
-            ${{ steps.resolve.outputs.image }}-bridge:${{ steps.resolve.outputs.tag }}
-            ${{ steps.resolve.outputs.image }}-bridge:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          labels: |
-            org.opencontainers.image.title=Hermes Studio bridge (studio ↔ gateway)
-            org.opencontainers.image.description=Bridge translating hermes-studio bridge protocol to tui_gateway JSON-RPC
             org.opencontainers.image.version=${{ steps.resolve.outputs.version }}
 
       - name: Summary (built)
@@ -227,5 +212,4 @@ jobs:
             echo "| Image | \`${IMAGE}:${TAG}\` |"
             echo "| | \`${IMAGE}:${VERSION}\` |"
             echo "| | \`${IMAGE}:latest\` |"
-            echo "| Bridge | \`${IMAGE}-bridge:${TAG}\` |"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -9,11 +9,14 @@
 ### 形态 A：bridge 架构（推荐）——连接你已运行的 hermes
 
 ```
-hermes-studio (干净容器) ──(bridge协议 TCP)──> bridge 容器 ──(tui_gateway JSON-RPC over WS)──> 你机器上的 hermes serve
+hermes-studio 容器（内置 bridge 子进程）
+    │  容器内 localhost:18765（bridge 协议）
+    ▼
+内置 bridge ──(tui_gateway JSON-RPC over WS)──> 你机器上的 hermes serve
 ```
 
-- studio 镜像内置 hermes 探测 stub（`WITH_BRIDGE_STUB=true`，默认开）
-- bridge 镜像由同一 workflow 自动构建：`ghcr.io/<你>/<仓库>-bridge`
+- **单容器**：bridge 打包在 studio 镜像内，设 `BRIDGE_GATEWAY_URL` 环境变量即启用（入口脚本自动拉起 bridge 子进程并注入连接配置；不设则纯净运行）
+- 镜像内置 hermes 探测 stub（`WITH_BRIDGE_STUB=true`，默认开）
 - 部署：`docker compose -f docker-compose.bridge.yml up -d`（改 `HERMES_GATEWAY_WS`/`HERMES_GATEWAY_TOKEN` 指向你的 hermes）
 - bridge 实现与协议映射详见 [bridge/PLAN.md](bridge/PLAN.md)，测试 122 项全过
 
