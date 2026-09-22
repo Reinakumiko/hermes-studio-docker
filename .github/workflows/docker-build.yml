@@ -174,7 +174,7 @@ jobs:
           context: ./upstream
           file: ./Dockerfile
           # bridge.py / container-entrypoint.sh 来自本仓库（named context）
-          additional-contexts: |
+          build-contexts: |
             bridge=./bridge
           platforms: ${{ steps.resolve.outputs.platforms }}
           push: true
